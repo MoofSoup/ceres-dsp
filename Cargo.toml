@@ -1,0 +1,28 @@
+
+[package]
+name = "ceres-dsp"
+version = "0.0.5"
+edition = "2021"
+description = "A modular digital signal processing framework for Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/ceres-dsp"
+keywords = ["dsp", "audio", "signal-processing", "synthesis", "modular"]
+categories = ["multimedia::audio", "science"]
+readme = "README.md"
+
+[lib]
+name = "ceres_dsp"
+
+[dependencies]
+{ path = "./ceres_macros", version = "0.0.5" }
+
+[dev-dependencies]
+# Maybe add some testing stuff later
+
+[workspace]
+members = [".", "ceres_macros"]
+resolver = "2"
+
+# Eventually you'll probably want:
+# [dependencies]
+# ceres_macros = { path = "./ceres_macros", version = "0.0.5" }
