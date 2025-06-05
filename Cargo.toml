@@ -5,7 +5,7 @@ version = "0.0.5"
 edition = "2021"
 description = "A modular digital signal processing framework for Rust"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/ceres-dsp"
+repository = "https://github.com/MoofSoup/ceres-dsp"
 keywords = ["dsp", "audio", "signal-processing", "synthesis", "modular"]
 categories = ["multimedia::audio", "science"]
 readme = "README.md"
@@ -14,15 +14,12 @@ readme = "README.md"
 name = "ceres_dsp"
 
 [dependencies]
-{ path = "./ceres_macros", version = "0.0.5" }
+ceres-macros = { path = "./ceres-macros", version = "0.0.5" }
 
 [dev-dependencies]
-# Maybe add some testing stuff later
+# None for now
 
 [workspace]
-members = [".", "ceres_macros"]
+members = [".", "ceres-macros"]
 resolver = "2"
 
-# Eventually you'll probably want:
-# [dependencies]
-# ceres_macros = { path = "./ceres_macros", version = "0.0.5" }
