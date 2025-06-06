@@ -11,10 +11,12 @@ categories = ["multimedia::audio", "science"]
 readme = "README.md"
 
 [lib]
-name = "ceres_dsp"
+name = "ceres"
 
 [dependencies]
 ceres-macros = { path = "./ceres-macros", version = "0.0.5" }
+crossbeam = "0.8.4"
+cpal = "0.15"
 
 [dev-dependencies]
 # None for now

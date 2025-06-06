@@ -4,128 +4,75 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::any::{Any, TypeId};
 use std::cell::UnsafeCell;
-use crossbeam::channel::{Receiver, Sender, unbounded};
+use std::ops::Index;
 
-pub type ComponentFn<E> = Box<dyn FnMut(&mut Runtime<E>, &[f32], &mut [f32], f32) + Send>;
+pub const BUFFER_SIZE: usize = 256;
 
-// === Event Bus ===
-pub struct EventBus<E> {
-    pub tx: Sender<E>,
-    pub rx: Receiver<E>,
-}
-
-impl<E> EventBus<E> {
-    fn new() -> Self {
-        let (tx, rx) = unbounded();
-        Self { tx, rx }
-    }
-    
-    pub fn send(&self, event: E) -> Result<(), crossbeam::channel::SendError<E>> {
-        self.tx.send(event)
-    }
-    
-    pub fn sender(&self) -> Sender<E> {
-        self.tx.clone()
-    }
-}
-
-impl<E> Clone for EventBus<E> {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            rx: self.rx.clone(),
-        }
-    }
-}
+pub type ComponentFn = Box<dyn FnMut(&mut Runtime, &[f32], &mut [f32], f32) + Send>;
 
 // === Handles ===
+#[derive(Copy, Clone)]
 pub struct StateHandle<T> {
     pub(crate) slot: usize,
     _phantom: PhantomData<T>,
 }
 
-impl<T> Clone for StateHandle<T> {
-    fn clone(&self) -> Self {
-        StateHandle {
-            slot: self.slot,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T> Copy for StateHandle<T> {}
-
+#[derive(Copy, Clone)]
 pub struct ModulatorHandle<T> {
     pub(crate) slot: usize,
     _phantom: PhantomData<T>,
 }
 
-impl<T> Clone for ModulatorHandle<T> {
-    fn clone(&self) -> Self {
-        ModulatorHandle {
-            slot: self.slot,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T> Copy for ModulatorHandle<T> {}
-
+#[derive(Copy, Clone)]
 pub struct ParameterHandle<T> {
     pub(crate) slot: usize,
     _phantom: PhantomData<T>,
 }
 
-impl<T> Clone for ParameterHandle<T> {
-    fn clone(&self) -> Self {
-        ParameterHandle {
-            slot: self.slot,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T> Copy for ParameterHandle<T> {}
-
 // === Traits ===
-pub trait Modulator<E>: Send + 'static {
-    fn update(&mut self, sample_rate: f32, event: Option<E>);
+pub trait Modulator: Send + 'static {
+    fn update(&mut self, sample_rate: f32, events: &[Event]);
     fn get_value(&self, index: usize) -> f32;
 }
 
 pub trait Parameters: Default + Send + 'static {
-    type Runtime<E: Send + 'static>: ParameterRuntime<E> + Send;
-    type Accessor<'a, E> where E: 'a;
+    type Runtime: ParameterRuntime + Send;
+    type Accessor<'a>;
     type Values: Copy;
     
-    fn create_runtime<E: Send>() -> Self::Runtime<E>;
-    fn create_accessor<E: Send>(runtime: &Self::Runtime<E>) -> Self::Accessor<'_, E>;
+    fn create_runtime() -> Self::Runtime;
+    fn create_accessor(runtime: &Self::Runtime) -> Self::Accessor<'_>;
 }
 
-pub trait ParameterRuntime<E>: Send {
-    fn update(&mut self, sources: &[Box<dyn Modulator<E>>]);
+pub trait ParameterRuntime: Send {
+    fn update(&mut self, sources: &[Box<dyn Modulator>]);
     fn route_parameter(&mut self, param_name: &str, source_index: usize, amount: f32);
 }
 
+// === Events (placeholder - you might want to make this more generic) ===
+#[derive(Clone, Copy, Debug)]
+pub enum Event {
+    Midi([u8; 3]),
+    // Add other event types as needed
+}
+
 // === Builder ===
-pub struct Builder<E> {
+pub struct Builder {
     pub(crate) next_state_slot: usize,
     pub(crate) state_builders: Vec<Box<dyn FnOnce() -> Box<dyn Any + Send>>>,
     pub(crate) state_map: HashMap<TypeId, usize>,
     
     pub(crate) next_modulation_slot: usize,
-    pub(crate) modulation_builders: Vec<Box<dyn FnOnce() -> Box<dyn ParameterRuntime<E>>>>,
+    pub(crate) modulation_builders: Vec<Box<dyn FnOnce() -> Box<dyn ParameterRuntime>>>,
     pub(crate) modulation_map: HashMap<TypeId, usize>,
     
     pub(crate) next_source_slot: usize,
-    pub(crate) modulation_sources: Vec<Box<dyn Modulator<E>>>,
+    pub(crate) modulation_sources: Vec<Box<dyn Modulator>>,
     pub(crate) source_map: HashMap<TypeId, usize>,
-    
-    _phantom: PhantomData<E>,
 }
 
-impl<E: Send + 'static> Builder<E> {
-    fn new() -> Self {
+impl Builder {
+    pub fn new() -> Self {
         Self {
             next_state_slot: 0,
             state_builders: Vec::new(),
@@ -136,7 +83,6 @@ impl<E: Send + 'static> Builder<E> {
             next_source_slot: 0,
             modulation_sources: Vec::new(),
             source_map: HashMap::new(),
-            _phantom: PhantomData,
         }
     }
 
@@ -152,18 +98,18 @@ impl<E: Send + 'static> Builder<E> {
     }
     
     pub fn use_parameters<T: Parameters>(&mut self) -> ParameterHandle<T> 
-    where T::Runtime<E>: ParameterRuntime<E> + 'static {
+    where <T as Parameters>::Runtime: ParameterRuntime {
         let type_id = TypeId::of::<T>();
         let slot = *self.modulation_map.entry(type_id).or_insert_with(|| {
             let slot = self.next_modulation_slot;
             self.next_modulation_slot += 1;
-            self.modulation_builders.push(Box::new(|| Box::new(T::create_runtime::<E>())));
+            self.modulation_builders.push(Box::new(|| Box::new(T::create_runtime())));
             slot
         });
         ParameterHandle { slot, _phantom: PhantomData }
     }
     
-    pub fn use_modulator<T: Modulator<E> + Default>(&mut self) -> ModulatorHandle<T> {
+    pub fn use_modulator<T: Modulator + Default>(&mut self) -> ModulatorHandle<T> {
         let type_id = TypeId::of::<T>();
         let slot = self.next_source_slot;
         self.next_source_slot += 1;
@@ -174,37 +120,29 @@ impl<E: Send + 'static> Builder<E> {
         ModulatorHandle { slot, _phantom: PhantomData }
     }
     
-    pub fn build<F>(self, f: F) -> Runtime<E> 
-    where 
-        F: FnOnce(&mut Builder<E>) -> ComponentFn<E>
-    {
-        let mut builder = self;
-        let component = f(&mut builder);
-        
+    pub fn build(self) -> Runtime {
         Runtime {
-            states: builder.state_builders
+            states: self.state_builders
                 .into_iter()
                 .map(|builder| UnsafeCell::new(builder()))
                 .collect(),
-            modulation_targets: builder.modulation_builders
+            modulation_targets: self.modulation_builders
                 .into_iter()
                 .map(|builder| UnsafeCell::new(builder()))
                 .collect(),
-            modulation_sources: UnsafeCell::new(builder.modulation_sources),
-            component: UnsafeCell::new(component),
+            modulation_sources: UnsafeCell::new(self.modulation_sources),
         }
     }
 }
 
 // === Runtime ===
-pub struct Runtime<E: 'static> {
+pub struct Runtime {
     pub(crate) states: Vec<UnsafeCell<Box<dyn Any + Send>>>,
-    pub(crate) modulation_targets: Vec<UnsafeCell<Box<dyn ParameterRuntime<E>>>>,
-    pub(crate) modulation_sources: UnsafeCell<Vec<Box<dyn Modulator<E>>>>,
-    pub(crate) component: UnsafeCell<ComponentFn<E>>,
+    pub(crate) modulation_targets: Vec<UnsafeCell<Box<dyn ParameterRuntime>>>,
+    pub(crate) modulation_sources: UnsafeCell<Vec<Box<dyn Modulator>>>,
 }
 
-impl<E: 'static + Send + Clone + Copy> Runtime<E> {
+impl Runtime {
     pub fn get<T: 'static>(&self, handle: &StateHandle<T>) -> &T {
         unsafe {
             (*self.states[handle.slot].get()).downcast_ref().unwrap()
@@ -217,11 +155,11 @@ impl<E: 'static + Send + Clone + Copy> Runtime<E> {
         }
     }
 
-    pub fn get_source_mut<T: Modulator<E> + 'static>(&self, handle: &ModulatorHandle<T>) -> &mut T {
+    pub fn get_source_mut<T: Modulator + 'static>(&self, handle: &ModulatorHandle<T>) -> &mut T {
         unsafe {
             let sources = &mut *self.modulation_sources.get();
             let boxed_modulator = &mut sources[handle.slot];
-            &mut *(boxed_modulator.as_mut() as *mut dyn Modulator<E> as *mut T)
+            &mut *(boxed_modulator.as_mut() as *mut dyn Modulator as *mut T)
         }
     }
 
@@ -238,25 +176,21 @@ impl<E: 'static + Send + Clone + Copy> Runtime<E> {
         }
     }
 
-    pub fn tick(&mut self, sample_rate: f32, event: Option<E>, input: &[f32], output: &mut [f32]) {
+    pub fn tick(&mut self, sample_rate: f32, events: &[Event]) {
         unsafe {
             let sources = &mut *self.modulation_sources.get();
-
             for modulator in sources.iter_mut() {
-                modulator.update(sample_rate, event);
+                modulator.update(sample_rate, events);
             }
-            
-            let component = &mut *self.component.get();
-            component(self, input, output, sample_rate);
         }
     }
     
-    pub fn get_parameters<T: Parameters>(&self, handle: &ParameterHandle<T>) -> T::Accessor<'_, E> {
+    pub fn get_parameters<T: Parameters>(&self, handle: &ParameterHandle<T>) -> T::Accessor<'_> {
         unsafe {
             let sources = &*self.modulation_sources.get();
             
             let target_boxed = &mut *self.modulation_targets[handle.slot].get();
-            let concrete_runtime = &mut *(target_boxed.as_mut() as *mut dyn ParameterRuntime<E> as *mut T::Runtime<E>);
+            let concrete_runtime = &mut *(target_boxed.as_mut() as *mut dyn ParameterRuntime as *mut T::Runtime);
             
             concrete_runtime.update(sources);
             T::create_accessor(concrete_runtime)
@@ -264,17 +198,12 @@ impl<E: 'static + Send + Clone + Copy> Runtime<E> {
     }
 }
 
-// === Main API ===
-pub fn new<E: Clone + Send + 'static>() -> (EventBus<E>, Builder<E>) {
-    (EventBus::new(), Builder::new())
-}
-
 // === Macros ===
 #[macro_export]
 macro_rules! parallel {
     ($(($weight:expr, $comp:expr)),+) => {
-        |builder: &mut $crate::Builder<_>| -> $crate::ComponentFn<_> {
-            let mut components: Vec<(f32, $crate::ComponentFn<_>)> = vec![$(($weight as f32, $comp(builder))),+];
+        |builder: &mut $crate::Builder| -> $crate::ComponentFn {
+            let mut components: Vec<(f32, $crate::ComponentFn)> = vec![$(($weight as f32, $comp(builder))),+];
             let mut temp_buffers = Vec::new();
             
             Box::new(move |runtime, input, output, sample_rate| {
@@ -304,8 +233,8 @@ macro_rules! parallel {
 #[macro_export]
 macro_rules! serial {
     ($($comp:expr),+) => {
-        |builder: &mut $crate::Builder<_>| -> $crate::ComponentFn<_> {
-            let mut components: Vec<$crate::ComponentFn<_>> = vec![$($comp(builder)),+];
+        |builder: &mut $crate::Builder| -> $crate::ComponentFn {
+            let mut components: Vec<$crate::ComponentFn> = vec![$($comp(builder)),+];
             let mut buffer_a = Vec::new();
             let mut buffer_b = Vec::new();
             
@@ -337,9 +266,4 @@ macro_rules! serial {
             })
         }
     };
-}
-
-struct ModulationRouting {
-    source_index: usize,
-    amount: f32,
 }

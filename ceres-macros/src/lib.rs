@@ -1,3 +1,4 @@
+//ceres-dsp/ceres-macros/src/lib.rs
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Data, Fields};
@@ -43,13 +44,13 @@ pub fn parameters(_args: TokenStream, input: TokenStream) -> TokenStream {
     
     let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
     
-    // Generate modulation field names AND the field declarations
+    // Generate modulation field names
     let mod_field_names: Vec<_> = field_names.iter().map(|name| {
         syn::Ident::new(&format!("{}_modulation", name.as_ref().unwrap()), name.span())
     }).collect();
     
     let mod_fields = mod_field_names.iter().map(|mod_name| {
-        quote! { #mod_name: Option<ModulationRouting> }
+        quote! { #mod_name: Option<::ceres::ModulationRouting> }
     });
     
     // Generate route methods
@@ -57,7 +58,7 @@ pub fn parameters(_args: TokenStream, input: TokenStream) -> TokenStream {
         let method_name = syn::Ident::new(&format!("route_{}", name.as_ref().unwrap()), name.span());
         quote! {
             fn #method_name(&mut self, source_index: usize, amount: f32) {
-                self.#mod_name = Some(ModulationRouting { source_index, amount });
+                self.#mod_name = Some(::ceres::ModulationRouting { source_index, amount });
             }
         }
     });
@@ -87,28 +88,28 @@ pub fn parameters(_args: TokenStream, input: TokenStream) -> TokenStream {
         #[derive(Clone, Copy, Default)]
         #input
         
-        struct #runtime_name {
+        struct #runtime_name<E> {
             base: #struct_name,
             #(#mod_fields,)*
-            computed_values: [#struct_name; BUFFER_SIZE],
+            computed_values: [#struct_name; ::ceres::BUFFER_SIZE],
         }
         
-        impl #runtime_name {
+        impl<E> #runtime_name<E> {
             fn new() -> Self {
                 let base = #struct_name::default();
                 Self {
                     base,
-                    #(#mod_field_names: None,)*  // FIXED: use mod_field_names
-                    computed_values: [base; BUFFER_SIZE],
+                    #(#mod_field_names: None,)*
+                    computed_values: [base; ::ceres::BUFFER_SIZE],
                 }
             }
             
             #(#route_methods)*
         }
         
-        impl ParameterRuntime for #runtime_name {
-            fn update(&mut self, sources: &[Box<dyn Modulator>]) {
-                for i in 0..BUFFER_SIZE {
+        impl<E: Send + 'static> ::ceres::ParameterRuntime<E> for #runtime_name<E> {
+            fn update(&mut self, sources: &[Box<dyn ::ceres::Modulator<E>>]) {
+                for i in 0..::ceres::BUFFER_SIZE {
                     #(#update_fields)*
                     self.computed_values[i] = #struct_name {
                         #(#field_names: #field_names),*
@@ -125,11 +126,11 @@ pub fn parameters(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
         
         struct #accessor_name<'a> {
-            values: &'a [#struct_name; BUFFER_SIZE],
+            values: &'a [#struct_name; ::ceres::BUFFER_SIZE],
         }
         
         impl<'a> #accessor_name<'a> {
-            fn new(values: &'a [#struct_name; BUFFER_SIZE]) -> Self {
+            fn new(values: &'a [#struct_name; ::ceres::BUFFER_SIZE]) -> Self {
                 Self { values }
             }
         }
@@ -137,20 +138,20 @@ pub fn parameters(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl<'a> std::ops::Index<usize> for #accessor_name<'a> {
             type Output = #struct_name;
             fn index(&self, index: usize) -> &Self::Output {
-                &self.values[index % BUFFER_SIZE]
+                &self.values[index % ::ceres::BUFFER_SIZE]
             }
         }
         
-        impl Parameters for #struct_name {
-            type Runtime = #runtime_name;
-            type Accessor<'a> = #accessor_name<'a>;
+        impl ::ceres::Parameters for #struct_name {
+            type Runtime<E: Send + 'static> = #runtime_name<E>;
+            type Accessor<'a, E> = #accessor_name<'a> where E: 'a;
             type Values = #struct_name;
             
-            fn create_runtime() -> Self::Runtime {
+            fn create_runtime<E: Send>() -> Self::Runtime<E> {
                 #runtime_name::new()
             }
             
-            fn create_accessor(runtime: &Self::Runtime) -> Self::Accessor<'_> {
+            fn create_accessor<E: Send>(runtime: &Self::Runtime<E>) -> Self::Accessor<'_, E> {
                 #accessor_name::new(&runtime.computed_values)
             }
         }
