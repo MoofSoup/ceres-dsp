@@ -1,7 +1,7 @@
 //! Ceres DSP Framework - Modular audio processing with parameter modulation
 
 pub mod core;
-pub mod components;
+
 
 // Re-export everything for clean imports
 pub use core::*;
